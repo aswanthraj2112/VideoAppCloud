@@ -1,4 +1,20 @@
-import { getParameters, getParameterWithDefault } from './utils/parameterStore.js';
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
+
+const s3 = new S3Client({ region: "ap-southeast-2" });
+const BUCKET_NAME = process.env.S3_BUCKET;
+
+export async function getPresignedUploadUrl(key, contentType) {
+  const command = new PutObjectCommand({
+    Bucket: BUCKET_NAME,
+    Key: key,
+    ContentType: contentType,
+  });
+  return getSignedUrl(s3, command, { expiresIn: 900 }); // 15 min
+}
+
+// Keep the existing config for backward compatibility
+import { getParameters, getParameterWithDefault } from '../utils/parameterStore.js';
 
 const REGION = process.env.AWS_REGION || 'ap-southeast-2';
 let configPromise;

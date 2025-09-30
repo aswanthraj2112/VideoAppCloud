@@ -4,7 +4,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { z } from 'zod';
 import config from '../config.js';
-import authMiddleware from '../auth/auth.middleware.js';
+import authMiddleware from '../auth/jwt.middleware.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { validateBody } from '../utils/validate.js';
 import { AppError } from '../utils/errors.js';
@@ -17,6 +17,7 @@ import {
   serveThumbnail,
   removeVideo
 } from './video.controller.js';
+import { createVideoUpload, listVideos } from './video.service.js';
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -50,10 +51,32 @@ const transcodeSchema = z.object({
 
 const router = express.Router();
 
+// Public helper endpoints for local development
+router.post('/upload', upload.single('file'), async (req, res, next) => {
+  try {
+    const ownerId = req.body?.ownerId || 'anonymous';
+    const video = await createVideoUpload(ownerId, req.file);
+    res.status(201).json({ video });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/', async (req, res, next) => {
+  try {
+    const { ownerId, page, limit } = req.query;
+    const videos = await listVideos(ownerId, page, limit);
+    res.json(videos);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Existing authenticated routes
 router.use(authMiddleware);
 
-router.post('/upload', upload.single('file'), asyncHandler(uploadVideo));
-router.get('/', asyncHandler(listUserVideos));
+router.post('/upload-file', upload.single('file'), asyncHandler(uploadVideo));
+router.get('/user', asyncHandler(listUserVideos));
 router.get('/:id', asyncHandler(getVideo));
 router.get('/:id/stream', asyncHandler(streamVideo));
 router.post('/:id/transcode', validateBody(transcodeSchema), asyncHandler(requestTranscode));

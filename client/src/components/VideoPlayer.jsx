@@ -1,11 +1,8 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import { videosAPI } from '../api/videos.js';
 
-function VideoPlayer ({ video, token, onClose }) {
-  const defaultVariant = video.status === 'ready' && video.transcodedFilename ? 'transcoded' : 'original';
-  const [variant, setVariant] = useState(defaultVariant);
-
-  const sourceUrl = useMemo(() => videosAPI.getStreamUrl(video.id, token, variant), [video.id, token, variant]);
+function VideoPlayer({ video, onClose }) {
+  const sourceUrl = useMemo(() => videosAPI.resolveStreamUrl(video), [video]);
 
   return (
     <div className="player-backdrop" onClick={onClose}>
@@ -17,21 +14,11 @@ function VideoPlayer ({ video, token, onClose }) {
           </button>
         </header>
         <div className="player-body">
-          <div className="player-controls">
-            <label>
-              Quality:
-              <select value={variant} onChange={(event) => setVariant(event.target.value)}>
-                <option value="original">Original</option>
-                {video.transcodedFilename && (
-                  <option value="transcoded">720p</option>
-                )}
-              </select>
-            </label>
-            <a className="btn-link" href={api.getStreamUrl(video.id, token, variant, true)}>
-              Download current
-            </a>
-          </div>
-          <video key={variant} className="video-player" controls src={sourceUrl} />
+          {sourceUrl ? (
+            <video className="video-player" controls src={sourceUrl} />
+          ) : (
+            <p>Stream URL unavailable for this video.</p>
+          )}
         </div>
       </div>
     </div>

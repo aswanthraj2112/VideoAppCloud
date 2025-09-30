@@ -22,9 +22,8 @@ const formatDuration = (seconds) => {
   return parts.join(':');
 };
 
-function VideoList ({
+function VideoList({
   videos,
-  token,
   loading,
   page,
   limit,
@@ -69,11 +68,8 @@ function VideoList ({
             <li key={video.id} className="video-card">
               <div className="thumb-wrapper">
                 <img
-                  src={videosAPI.getThumbnailUrl(video.id, token)}
+                  src={videosAPI.resolveThumbnailUrl(video) || 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjkwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iOTAiIGZpbGw9IiNFMEUwRTAiIHJ4PSIxMiIvPjx0ZXh0IHg9IjYwIiB5PSI0OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjE0IiBmaWxsPSIjOTk5Ij5ObyBUaHVtYjwvdGV4dD48L3N2Zz4='}
                   alt={`${video.originalName} thumbnail`}
-                  onError={(event) => {
-                    event.currentTarget.src = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIwIiBoZWlnaHQ9IjkwIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciPjxyZWN0IHdpZHRoPSIxMjAiIGhlaWdodD0iOTAiIGZpbGw9IiNFMEUwRTAiIHJ4PSIxMiIvPjx0ZXh0IHg9IjYwIiB5PSI0OCIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZm9udC1mYW1pbHk9IkFyaWFsIiBmb250LXNpemU9IjE0IiBmaWxsPSIjOTk5Ij5ObyBUaHVtYjwvdGV4dD48L3N2Zz4=';
-                  }}
                 />
               </div>
               <div className="video-info">
@@ -89,22 +85,9 @@ function VideoList ({
                 <button type="button" className="btn" onClick={() => onSelect(video)}>
                   Play
                 </button>
-                <button
-                  type="button"
-                  className="btn"
-                  disabled={video.status === 'transcoding'}
-                  onClick={() => onTranscode(video)}
-                >
+                <button type="button" className="btn" onClick={() => onTranscode(video)}>
                   Transcode 720p
                 </button>
-                <a className="btn-link" href={videosAPI.getStreamUrl(video.id, token, 'original', true)}>
-                  Download original
-                </a>
-                {video.transcodedFilename && video.status === 'ready' && (
-                  <a className="btn-link" href={videosAPI.getStreamUrl(video.id, token, 'transcoded', true)}>
-                    Download 720p
-                  </a>
-                )}
                 <button type="button" className="btn btn-danger" onClick={() => onDelete(video)}>
                   Delete
                 </button>

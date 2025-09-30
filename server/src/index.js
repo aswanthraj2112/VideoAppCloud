@@ -71,14 +71,15 @@ const start = async () => {
   console.log('🚀 Starting server...');
 
   // Initialize all configurations (Parameter Store + Secrets Manager)
-  console.log('� Loading configuration from AWS Parameter Store and Secrets Manager...');
+  console.log('Loading configuration from AWS Parameter Store and Secrets Manager...');
   await config.initialize();
 
   await ensureStorageDirs();
 
-  app.listen(config.PORT, '0.0.0.0', () => {
-    console.log(`Server listening on port ${config.PORT}`);
-    console.log(`Available at: ${config.DOMAIN_NAME || 'http://n11817143-videoapp.cab432.com'}:${config.PORT}`);
+  app.listen(config.PORT, config.HOST || '127.0.0.1', () => {
+    const hostLabel = config.DOMAIN_NAME || `http://${config.HOST || '127.0.0.1'}`;
+    console.log(`Server listening on ${config.HOST || '127.0.0.1'}:${config.PORT}`);
+    console.log(`Available at: ${hostLabel}:${config.PORT}`);
     console.log(`JWT Secret loaded: ${config.JWT_SECRET ? '✅ From Secrets Manager' : '⚠️  Fallback'}`);
     console.log(`Configuration loaded: ${config.S3_BUCKET ? '✅ From Parameter Store' : '⚠️  Fallback'}`);
   });

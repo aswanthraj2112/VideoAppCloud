@@ -5,7 +5,7 @@ import Uploader from '../components/Uploader.jsx';
 import VideoList from '../components/VideoList.jsx';
 import VideoPlayer from '../components/VideoPlayer.jsx';
 
-function Dashboard({ token, user }) {
+function Dashboard({ user }) {
   const notify = useToast();
   const [videos, setVideos] = useState([]);
   const [page, setPage] = useState(1);
@@ -19,8 +19,9 @@ function Dashboard({ token, user }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+
     videosAPI
-      .listVideos(token, page, limit)
+      .listVideos(page, limit, user?.id)
       .then((data) => {
         if (!cancelled) {
           setVideos(data.items);
@@ -37,17 +38,18 @@ function Dashboard({ token, user }) {
           setLoading(false);
         }
       });
+
     return () => {
       cancelled = true;
     };
-  }, [token, page, limit, notify, refreshIndex]);
+  }, [page, limit, notify, refreshIndex, user?.id]);
 
   const triggerRefresh = () => setRefreshIndex((value) => value + 1);
 
   const handleUpload = async (file) => {
     setUploading(true);
     try {
-      await videosAPI.uploadVideo(token, file);
+      await videosAPI.uploadVideo(file, user?.id);
       notify(`Uploaded ${file.name}`, 'success');
       setPage(1);
       triggerRefresh();
@@ -62,42 +64,29 @@ function Dashboard({ token, user }) {
     setSelectedVideo(video);
   };
 
-  const handleTranscode = async (video) => {
-    try {
-      await api.requestTranscode(token, video.id, '720p');
-      notify('Transcode started', 'info');
-      triggerRefresh();
-    } catch (error) {
-      notify(error.message, 'error');
-    }
+  const handleTranscode = () => {
+    notify('Transcoding is not available in local mode.', 'info');
   };
 
-  const handleDelete = async (video) => {
+  const handleDelete = (video) => {
     if (!window.confirm(`Delete ${video.originalName}? This cannot be undone.`)) {
       return;
     }
-    try {
-      await api.deleteVideo(token, video.id);
-      notify('Video deleted', 'info');
-      if (selectedVideo?.id === video.id) {
-        setSelectedVideo(null);
-      }
-      triggerRefresh();
-    } catch (error) {
-      notify(error.message, 'error');
+    notify('Delete is not implemented in this demo.', 'info');
+    if (selectedVideo?.id === video.id) {
+      setSelectedVideo(null);
     }
   };
 
   return (
     <div className="dashboard">
       <section className="welcome">
-        <h1>Hello, {user.username.toUpperCase()}!</h1>
-        <p>Upload a video to generate &720p kick off a conversions, and stream directly from the browser.</p>
+        <h1>Hello, {(user?.username || 'Guest').toUpperCase()}!</h1>
+        <p>Upload a video to preview it directly from the browser.</p>
       </section>
       <Uploader onUpload={handleUpload} uploading={uploading} />
       <VideoList
         videos={videos}
-        token={token}
         loading={loading}
         page={page}
         limit={limit}
@@ -108,7 +97,7 @@ function Dashboard({ token, user }) {
         onPageChange={setPage}
       />
       {selectedVideo && (
-        <VideoPlayer video={selectedVideo} token={token} onClose={() => setSelectedVideo(null)} />
+        <VideoPlayer video={selectedVideo} onClose={() => setSelectedVideo(null)} />
       )}
     </div>
   );

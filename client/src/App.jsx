@@ -2,17 +2,18 @@ import React, { createContext, useCallback, useEffect, useMemo, useState } from 
 import NavBar from './components/NavBar.jsx';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
-import { videosAPI } from './api/videos.js';
 import { authAPI } from './api/auth.js';
 import './styles/styles.css';
 
-export const ToastContext = createContext(() => { });
+export const ToastContext = createContext(() => {});
 
 export const useToast = () => React.useContext(ToastContext);
 
+const createGuestUser = () => ({ id: 'guest', username: 'guest' });
+
 function App() {
   const [token, setToken] = useState(() => window.localStorage.getItem('jwt') || '');
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(() => (window.localStorage.getItem('jwt') ? null : createGuestUser()));
   const [loadingUser, setLoadingUser] = useState(Boolean(token));
   const [toast, setToast] = useState(null);
   const [cognitoReady, setCognitoReady] = useState(false);
@@ -22,12 +23,10 @@ function App() {
     setTimeout(() => setToast(null), 4000);
   }, []);
 
-  // Initialize Cognito configuration (non-blocking for hybrid auth)
   useEffect(() => {
     const initializeCognito = async () => {
       try {
-        const config = await authAPI.getConfig();
-        // Note: configureCognito is now in client config, not imported
+        await authAPI.getConfig();
         setCognitoReady(true);
       } catch (error) {
         console.error('Failed to initialize Cognito:', error);
@@ -35,18 +34,18 @@ function App() {
       }
     };
 
-    // Set cognitoReady to true immediately for hybrid auth (login works without Cognito)
     setCognitoReady(true);
-
-    // Initialize Cognito in background for registration feature
     initializeCognito();
-  }, [notify]);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     if (!token) {
+      setUser(createGuestUser());
       setLoadingUser(false);
-      return;
+      return () => {
+        cancelled = true;
+      };
     }
     setLoadingUser(true);
     authAPI
@@ -61,7 +60,7 @@ function App() {
           notify('Session expired. Please log in again.', 'error');
           setToken('');
           window.localStorage.removeItem('jwt');
-          setUser(null);
+          setUser(createGuestUser());
         }
       })
       .finally(() => {
@@ -84,11 +83,12 @@ function App() {
   const handleLogout = () => {
     window.localStorage.removeItem('jwt');
     setToken('');
-    setUser(null);
+    setUser(createGuestUser());
     notify('Logged out', 'info');
   };
 
   const toastValue = useMemo(() => notify, [notify]);
+  const isGuest = user?.id === 'guest';
 
   return (
     <ToastContext.Provider value={toastValue}>
@@ -100,8 +100,10 @@ function App() {
               <h2>Initializing...</h2>
               <p>Setting up authentication service...</p>
             </div>
-          ) : token && user ? (
-            <Dashboard token={token} user={user} />
+          ) : user && !isGuest && token ? (
+            <Dashboard user={user} />
+          ) : user ? (
+            <Dashboard user={user} />
           ) : (
             <Login onAuthenticated={handleAuthenticated} loading={loadingUser} />
           )}

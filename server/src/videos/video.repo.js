@@ -34,3 +34,40 @@ export async function deleteVideo(userId, videoId) {
   const repo = await loadRepo();
   return repo.deleteVideo(userId, videoId);
 }
+
+// New minimal repository functions for DynamoDB
+import { dynamoClient, TABLE_NAME } from "../config/dynamo.js";
+import { PutItemCommand, QueryCommand } from "@aws-sdk/client-dynamodb";
+
+export async function saveVideoMetadata(item) {
+  const command = new PutItemCommand({
+    TableName: TABLE_NAME,
+    Item: {
+      videoId: { S: item.videoId },
+      ownerId: { S: item.ownerId },
+      filename: { S: item.filename },
+      s3Key: { S: item.s3Key },
+      status: { S: item.status },
+      createdAt: { S: item.createdAt },
+    },
+  });
+  await dynamoClient.send(command);
+}
+
+export async function fetchVideoMetadata(ownerId) {
+  const command = new QueryCommand({
+    TableName: TABLE_NAME,
+    KeyConditionExpression: "ownerId = :o",
+    ExpressionAttributeValues: {
+      ":o": { S: ownerId },
+    },
+  });
+  const result = await dynamoClient.send(command);
+  return result.Items.map((item) => ({
+    videoId: item.videoId.S,
+    filename: item.filename.S,
+    s3Key: item.s3Key.S,
+    status: item.status.S,
+    createdAt: item.createdAt.S,
+  }));
+}

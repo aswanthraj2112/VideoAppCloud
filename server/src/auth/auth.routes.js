@@ -3,7 +3,7 @@ import { z } from 'zod';
 import asyncHandler from '../utils/asyncHandler.js';
 import { validateBody } from '../utils/validate.js';
 import { register, login, me, confirmSignUp, resendConfirmationCode } from './auth.controller.js';
-import authMiddleware from './auth.middleware.js';
+import authMiddleware from './jwt.middleware.js';
 
 const router = express.Router();
 

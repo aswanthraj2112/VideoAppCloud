@@ -1,5 +1,10 @@
-import { getParameters } from './utils/parameterStore.js';
+import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import { getParameters } from '../utils/parameterStore.js';
 
+export const dynamoClient = new DynamoDBClient({ region: "ap-southeast-2" });
+export const TABLE_NAME = process.env.DYNAMO_TABLE;
+
+// Keep the existing config for backward compatibility
 const REGION = process.env.AWS_REGION || 'ap-southeast-2';
 let configPromise;
 

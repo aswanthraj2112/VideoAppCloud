@@ -1,4 +1,4 @@
-const RAW_API_URL = import.meta.env.VITE_API_URL || 'https://n11817143-videoapp.cab432.com';
+const RAW_API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4001';
 
 function trimTrailingSlashes(value) {
   if (!value) return '';
@@ -36,12 +36,8 @@ function buildRequestUrl(path = '') {
   return new URL(sanitizedPath, `${API_BASE_URL}/`).toString();
 }
 
-async function request(path, { method = 'GET', token, body, headers = {} } = {}) {
+async function request(path, { method = 'GET', body, headers = {} } = {}) {
   const options = { method, headers: { ...headers } };
-
-  if (token) {
-    options.headers.Authorization = `Bearer ${token}`;
-  }
 
   if (body instanceof FormData) {
     options.body = body;
@@ -56,58 +52,47 @@ async function request(path, { method = 'GET', token, body, headers = {} } = {})
   const payload = isJson ? await response.json() : null;
 
   if (!response.ok) {
-    const message = payload?.error?.message || 'Request failed';
+    const message = payload?.error?.message || payload?.message || 'Request failed';
     throw new Error(message);
   }
 
   return payload;
 }
 
-// Video API functions
+function resolveMediaUrl(relativePath) {
+  if (!relativePath) return '';
+  try {
+    const maybeUrl = new URL(relativePath);
+    return maybeUrl.toString();
+  } catch {
+    return new URL(relativePath.startsWith('/') ? relativePath : `/${relativePath}`, `${API_BASE_URL}/`).toString();
+  }
+}
+
 export const videosAPI = {
-  uploadVideo: (token, file) => {
+  uploadVideo: async (file, ownerId) => {
     const formData = new FormData();
     formData.append('file', file);
-    return request('/api/videos/upload', { method: 'POST', token, body: formData });
+    if (ownerId) {
+      formData.append('ownerId', ownerId);
+    }
+
+    return request('/api/videos/upload', { method: 'POST', body: formData });
   },
 
-  listVideos: (token, page = 1, limit = 10) =>
-    request(`/api/videos?page=${page}&limit=${limit}`, { token }),
-
-  getVideo: (token, id) => request(`/api/videos/${id}`, { token }),
-
-  requestTranscode: (token, id, preset = '720p') =>
-    request(`/api/videos/${id}/transcode`, { method: 'POST', token, body: { preset } }),
-
-  deleteVideo: (token, id) => request(`/api/videos/${id}`, { method: 'DELETE', token }),
-
-  getStreamUrl: (id, token, variant = 'original', download = false) => {
-    const params = new URLSearchParams();
-    params.set('variant', variant);
-    if (download) {
-      params.set('download', '1');
+  listVideos: (page = 1, limit = 10, ownerId) => {
+    const params = new URLSearchParams({
+      page: String(page),
+      limit: String(limit)
+    });
+    if (ownerId) {
+      params.set('ownerId', ownerId);
     }
-    if (token) {
-      params.set('token', token);
-    }
-    const url = new URL(buildRequestUrl(`/api/videos/${id}/stream`));
-    for (const [key, value] of params.entries()) {
-      url.searchParams.set(key, value);
-    }
-    return url.toString();
+    return request(`/api/videos?${params.toString()}`);
   },
 
-  getThumbnailUrl: (id, token) => {
-    const params = new URLSearchParams();
-    if (token) {
-      params.set('token', token);
-    }
-    const url = new URL(buildRequestUrl(`/api/videos/${id}/thumbnail`));
-    for (const [key, value] of params.entries()) {
-      url.searchParams.set(key, value);
-    }
-    return url.toString();
-  }
+  resolveStreamUrl: (video) => resolveMediaUrl(video?.streamPath),
+  resolveThumbnailUrl: (video) => resolveMediaUrl(video?.thumbPath)
 };
 
 export default videosAPI;

@@ -1,385 +1,94 @@
-import path from 'path';
-import fs from 'fs/promises';
-import { createReadStream, createWriteStream } from 'fs';
-import { pipeline } from 'stream/promises';
 import { randomUUID } from 'crypto';
-import ffmpeg from 'fluent-ffmpeg';
-import mime from 'mime-types';
 import config from '../config.js';
-import { AppError, NotFoundError } from '../utils/errors.js';
-import { loadS3Config } from '../config.s3.js';
-import { S3Client, PutObjectCommand, DeleteObjectCommand, GetObjectCommand } from '@aws-sdk/client-s3';
-import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import {
-  createVideo as repoCreateVideo,
-  listVideos as repoListVideos,
-  getVideo as repoGetVideo,
-  updateVideo as repoUpdateVideo,
-  deleteVideo as repoDeleteVideo
-} from './video.repo.js';
+import { AppError } from '../utils/errors.js';
 
-let s3Client;
+const inMemoryStore = new Map();
 
-const getS3Client = async () => {
-  if (!s3Client) {
-    const { REGION } = await loadS3Config();
-    s3Client = new S3Client({ region: REGION });
+const buildPublicPaths = (record) => {
+  if (!config.USE_LOCAL_STORAGE) {
+    return {
+      streamPath: null,
+      thumbPath: null
+    };
   }
-  return s3Client;
-};
 
-const probeVideo = (filePath) => new Promise((resolve, reject) => {
-  ffmpeg.ffprobe(filePath, (err, data) => {
-    if (err) return reject(err);
-    return resolve(data);
-  });
-});
-
-const generateThumbnail = (inputPath, outputPath) => new Promise((resolve, reject) => {
-  ffmpeg(inputPath)
-    .on('error', reject)
-    .on('end', resolve)
-    .screenshots({
-      timestamps: ['2'],
-      filename: path.basename(outputPath),
-      folder: path.dirname(outputPath),
-      size: '640x?'
-    });
-});
-
-const mapVideo = (video) => ({
-  id: video.id,
-  userId: String(video.userId),
-  originalName: video.originalName,
-  storedFilename: video.storedFilename,
-  format: video.format,
-  durationSec: video.durationSec != null ? Number(video.durationSec) : null,
-  status: video.status,
-  width: video.width != null ? Number(video.width) : null,
-  height: video.height != null ? Number(video.height) : null,
-  sizeBytes: video.sizeBytes != null ? Number(video.sizeBytes) : null,
-  createdAt: video.createdAt,
-  updatedAt: video.updatedAt,
-  thumbPath: video.thumbPath,
-  transcodedFilename: video.transcodedFilename
-});
-
-const getKeyBaseFromOriginal = async (storedFilename) => {
-  const { RAW_PREFIX } = await loadS3Config();
-  if (storedFilename.startsWith(RAW_PREFIX)) {
-    const withoutPrefix = storedFilename.slice(RAW_PREFIX.length);
-    const dotIndex = withoutPrefix.lastIndexOf('.');
-    return dotIndex > 0 ? withoutPrefix.slice(0, dotIndex) : withoutPrefix;
-  }
-  const parsed = path.parse(storedFilename);
-  return parsed.name;
-};
-
-async function uploadToS3 (prefix, localPath, keyName, contentType) {
-  const { S3_BUCKET } = await loadS3Config();
-  const client = await getS3Client();
-  const Key = `${prefix}${keyName}`;
-  await client.send(new PutObjectCommand({
-    Bucket: S3_BUCKET,
-    Key,
-    Body: createReadStream(localPath),
-    ContentType: contentType || mime.lookup(localPath) || 'application/octet-stream'
-  }));
-  await fs.unlink(localPath).catch(() => {});
-  return { bucket: S3_BUCKET, key: Key };
-}
-
-async function saveOriginalToS3 (localPath, keyName, contentType) {
-  const { RAW_PREFIX } = await loadS3Config();
-  return uploadToS3(RAW_PREFIX, localPath, keyName, contentType);
-}
-
-async function saveThumbToS3 (localPath, keyName) {
-  const { THUMB_PREFIX } = await loadS3Config();
-  return uploadToS3(THUMB_PREFIX, localPath, keyName, 'image/jpeg');
-}
-
-async function saveTranscodedToS3 (localPath, keyName) {
-  const { TRANSCODED_PREFIX } = await loadS3Config();
-  return uploadToS3(TRANSCODED_PREFIX, localPath, keyName, 'video/mp4');
-}
-
-async function presignS3Url (key, { downloadName } = {}) {
-  if (!key) {
-    throw new NotFoundError('Object key not provided');
-  }
-  const { S3_BUCKET, PRESIGNED_TTL_SECONDS } = await loadS3Config();
-  const client = await getS3Client();
-  const params = {
-    Bucket: S3_BUCKET,
-    Key: key
+  return {
+    streamPath: `/static/videos/${record.storedFilename}`,
+    thumbPath: record.thumbFilename ? `/static/thumbs/${record.thumbFilename}` : null
   };
-  if (downloadName) {
-    params.ResponseContentDisposition = `attachment; filename="${downloadName}"`;
-  }
-  const command = new GetObjectCommand(params);
-  return getSignedUrl(client, command, { expiresIn: PRESIGNED_TTL_SECONDS });
-}
+};
 
-async function deleteFromS3 (keys = []) {
-  if (!keys.length) return;
-  const { S3_BUCKET } = await loadS3Config();
-  const client = await getS3Client();
-  await Promise.all(keys.map(async (Key) => {
-    if (!Key) return;
-    await client.send(new DeleteObjectCommand({ Bucket: S3_BUCKET, Key })).catch(() => {});
-  }));
-}
+const mapRecord = (record) => {
+  const { streamPath, thumbPath } = buildPublicPaths(record);
+  return {
+    id: record.id,
+    ownerId: record.ownerId,
+    originalName: record.originalName,
+    storedFilename: record.storedFilename,
+    mimeType: record.mimeType,
+    sizeBytes: record.sizeBytes,
+    status: record.status,
+    durationSec: record.durationSec ?? null,
+    width: record.width ?? null,
+    height: record.height ?? null,
+    createdAt: record.createdAt,
+    updatedAt: record.updatedAt,
+    thumbPath,
+    transcodedFilename: record.transcodedFilename ?? null,
+    streamPath
+  };
+};
 
-async function downloadFromS3 (key, localPath) {
-  const { S3_BUCKET } = await loadS3Config();
-  const client = await getS3Client();
-  const { Body } = await client.send(new GetObjectCommand({ Bucket: S3_BUCKET, Key: key }));
-  await fs.mkdir(path.dirname(localPath), { recursive: true });
-  await pipeline(Body, createWriteStream(localPath));
-  return localPath;
-}
-
-export async function ensureStorageDirs () {
-  await fs.mkdir(config.PUBLIC_VIDEOS_DIR, { recursive: true });
-  await fs.mkdir(config.PUBLIC_THUMBS_DIR, { recursive: true });
-  await fs.mkdir(path.join(config.PUBLIC_VIDEOS_DIR, 'tmp'), { recursive: true });
-}
-
-export async function handleUpload (userId, file) {
+export async function createVideoUpload(ownerId = 'anonymous', file) {
   if (!file) {
     throw new AppError('No file uploaded', 400, 'NO_FILE');
   }
 
-  const absolutePath = path.join(config.PUBLIC_VIDEOS_DIR, file.filename);
-  let thumbAbsolute;
-  let keyBase;
-  try {
-    const metadata = await probeVideo(absolutePath);
-    const videoStream = metadata.streams.find((stream) => stream.codec_type === 'video');
-    const duration = metadata.format?.duration ? Number.parseFloat(metadata.format.duration) : null;
-    const format = metadata.format?.format_name || file.mimetype;
+  const id = randomUUID();
+  const now = new Date().toISOString();
 
-    keyBase = randomUUID();
-    const ext = path.extname(file.originalname) || path.extname(file.filename) || '.mp4';
-    const thumbFile = `${keyBase}.jpg`;
-    thumbAbsolute = path.join(config.PUBLIC_THUMBS_DIR, `${keyBase}.jpg`);
+  const record = {
+    id,
+    ownerId,
+    originalName: file.originalname,
+    storedFilename: file.filename,
+    mimeType: file.mimetype,
+    sizeBytes: file.size,
+    status: 'uploaded',
+    durationSec: null,
+    width: null,
+    height: null,
+    createdAt: now,
+    updatedAt: now,
+    thumbFilename: null,
+    transcodedFilename: null
+  };
 
-    await generateThumbnail(absolutePath, thumbAbsolute);
-
-    let storedFilename, thumbPath;
-    
-    if (config.USE_LOCAL_STORAGE) {
-      // Use local storage for development
-      storedFilename = file.filename;
-      thumbPath = thumbFile;
-    } else {
-      // Use S3 for production
-      const originalUpload = await saveOriginalToS3(absolutePath, `${keyBase}${ext}`, file.mimetype);
-      const thumbUpload = await saveThumbToS3(thumbAbsolute, thumbFile);
-      storedFilename = originalUpload.key;
-      thumbPath = thumbUpload.key;
-    }
-
-    const now = new Date().toISOString();
-    const created = await repoCreateVideo({
-      id: keyBase,
-      userId: String(userId),
-      originalName: file.originalname,
-      storedFilename,
-      format,
-      durationSec: duration,
-      status: 'uploaded',
-      width: videoStream?.width || null,
-      height: videoStream?.height || null,
-      sizeBytes: file.size,
-      createdAt: now,
-      updatedAt: now,
-      thumbPath,
-      transcodedFilename: null
-    });
-
-    return created.id;
-  } catch (error) {
-    console.error('Upload processing failed', error);
-    await fs.unlink(absolutePath).catch(() => {});
-    if (thumbAbsolute && !config.USE_LOCAL_STORAGE) {
-      await fs.unlink(thumbAbsolute).catch(() => {});
-    }
-    throw new AppError('Unable to process uploaded video', 500, 'UPLOAD_PROCESSING_FAILED');
-  }
+  inMemoryStore.set(id, record);
+  return mapRecord(record);
 }
 
-export async function listVideos (userId, page, limit) {
-  const { total, items } = await repoListVideos(String(userId), page, limit);
+export async function listVideos(ownerId, page = 1, limit = 10) {
+  let records = Array.from(inMemoryStore.values());
+  if (ownerId) {
+    records = records.filter((record) => record.ownerId === ownerId);
+  }
+
+  const safePage = Number.isFinite(Number(page)) && Number(page) > 0 ? Number(page) : 1;
+  const safeLimit = Number.isFinite(Number(limit)) && Number(limit) > 0 ? Number(limit) : 10;
+  const start = (safePage - 1) * safeLimit;
+  const paged = records.slice(start, start + safeLimit);
+
   return {
-    total,
-    items: items.map(mapVideo)
+    total: records.length,
+    items: paged.map(mapRecord)
   };
 }
 
-export async function getVideoByIdForUser (id, userId) {
-  const video = await repoGetVideo(String(userId), id);
-  if (!video) {
-    throw new NotFoundError('Video not found');
-  }
-  return mapVideo(video);
+export function getVideoById(videoId) {
+  return inMemoryStore.get(videoId) ?? null;
 }
 
-const buildDownloadName = (video, variant) => {
-  const base = video.originalName ? path.parse(video.originalName).name : 'video';
-  if (variant === 'transcoded' && video.transcodedFilename) {
-    return `${base}-720p${path.extname(video.transcodedFilename) || '.mp4'}`;
-  }
-  const extension = path.extname(video.originalName || '') || '.mp4';
-  return `${base}${extension}`;
-};
-
-export async function getVideoStreamUrl (video, variant = 'original', download = false) {
-  const useTranscoded = variant === 'transcoded';
-  if (useTranscoded && !video.transcodedFilename) {
-    throw new AppError('Transcoded file not yet available', 409, 'TRANSCODE_PENDING');
-  }
-  const key = useTranscoded ? video.transcodedFilename : video.storedFilename;
-  if (!key) {
-    throw new NotFoundError('Video file missing on storage');
-  }
-  
-  if (config.USE_LOCAL_STORAGE) {
-    // For local storage, return the local file path
-    const filename = useTranscoded ? video.transcodedFilename : video.storedFilename;
-    return `/static/videos/${filename}`;
-  }
-  
-  const downloadName = download ? buildDownloadName(video, variant) : undefined;
-  return presignS3Url(key, { downloadName });
-}
-
-export async function getThumbnailUrl (video) {
-  if (!video.thumbPath) {
-    throw new NotFoundError('Thumbnail not generated yet');
-  }
-  
-  if (config.USE_LOCAL_STORAGE) {
-    // For local storage, return the local file path
-    return `/static/thumbs/${video.thumbPath}`;
-  }
-  
-  return presignS3Url(video.thumbPath);
-}
-
-export async function deleteVideo (video) {
-  if (config.USE_LOCAL_STORAGE) {
-    // Delete local files
-    const filesToDelete = [
-      video.storedFilename ? path.join(config.PUBLIC_VIDEOS_DIR, video.storedFilename) : null,
-      video.thumbPath ? path.join(config.PUBLIC_THUMBS_DIR, video.thumbPath) : null,
-      video.transcodedFilename ? path.join(config.PUBLIC_VIDEOS_DIR, video.transcodedFilename) : null
-    ].filter(Boolean);
-    
-    await Promise.all(filesToDelete.map(filePath => 
-      fs.unlink(filePath).catch(() => {}) // Ignore errors if file doesn't exist
-    ));
-  } else {
-    // Delete from S3
-    await deleteFromS3([
-      video.storedFilename,
-      video.thumbPath,
-      video.transcodedFilename
-    ]);
-  }
-  
-  await repoDeleteVideo(String(video.userId), video.id);
-}
-
-export async function transcodeVideo (video, preset = '720p') {
-  if (video.status === 'transcoding') {
-    throw new AppError('Video is already transcoding', 409, 'ALREADY_TRANSCODING');
-  }
-  if (!video.storedFilename) {
-    throw new NotFoundError('Original video file missing');
-  }
-
-  const ownerId = String(video.userId);
-  const startedAt = new Date().toISOString();
-  await repoUpdateVideo(ownerId, video.id, { status: 'transcoding', updatedAt: startedAt });
-
-  const tmpDir = path.join(config.PUBLIC_VIDEOS_DIR, 'tmp');
-  await fs.mkdir(tmpDir, { recursive: true });
-
-  let localOriginal, localOutput, outputFilename;
-
-  if (config.USE_LOCAL_STORAGE) {
-    // For local storage, use the files directly
-    localOriginal = path.join(config.PUBLIC_VIDEOS_DIR, video.storedFilename);
-    const baseName = path.parse(video.storedFilename).name;
-    outputFilename = `${baseName}-${preset}.mp4`;
-    localOutput = path.join(config.PUBLIC_VIDEOS_DIR, outputFilename);
-  } else {
-    // For S3 storage, download to temp directory
-    const originalExt = path.extname(video.storedFilename) || '.mp4';
-    const baseName = await getKeyBaseFromOriginal(video.storedFilename);
-    localOriginal = path.join(tmpDir, `${baseName}-original${originalExt}`);
-    localOutput = path.join(tmpDir, `${baseName}-${preset}.mp4`);
-    
-    try {
-      await downloadFromS3(video.storedFilename, localOriginal);
-    } catch (error) {
-      console.error('Failed to download original for transcoding', error);
-      await repoUpdateVideo(ownerId, video.id, { status: 'failed' });
-      throw new NotFoundError('Original video file missing from storage');
-    }
-  }
-
-  // Clean up any existing output file
-  await fs.unlink(localOutput).catch(() => {});
-
-  console.log(`Starting ffmpeg transcode for video ${video.id}`);
-
-  try {
-    await new Promise((resolve, reject) => {
-      ffmpeg(localOriginal)
-        .outputOptions([
-          '-c:v libx264',
-          '-preset fast',
-          '-crf 23',
-          '-vf scale=1280:-2',
-          '-c:a aac',
-          '-b:a 128k',
-          '-movflags +faststart'
-        ])
-        .format('mp4')
-        .on('error', reject)
-        .on('end', resolve)
-        .save(localOutput);
-    });
-
-    let transcodedFilename;
-    if (config.USE_LOCAL_STORAGE) {
-      // For local storage, the file is already in the right place
-      transcodedFilename = outputFilename;
-    } else {
-      // For S3 storage, upload the transcoded file
-      const outputKeyName = `${await getKeyBaseFromOriginal(video.storedFilename)}-${preset}.mp4`;
-      const upload = await saveTranscodedToS3(localOutput, outputKeyName);
-      transcodedFilename = upload.key;
-    }
-
-    await repoUpdateVideo(ownerId, video.id, {
-      status: 'ready',
-      transcodedFilename,
-      updatedAt: new Date().toISOString()
-    });
-  } catch (error) {
-    console.error(`ffmpeg failed for video ${video.id}`, error);
-    await fs.unlink(localOutput).catch(() => {});
-    await repoUpdateVideo(ownerId, video.id, { status: 'failed' });
-    throw new AppError('Transcoding failed', 500, 'TRANSCODE_FAILED');
-  } finally {
-    // Clean up temp files (only for S3 mode)
-    if (!config.USE_LOCAL_STORAGE) {
-      await fs.unlink(localOriginal).catch(() => {});
-      await fs.unlink(localOutput).catch(() => {});
-    }
-  }
+export async function deleteVideoRecord(videoId) {
+  inMemoryStore.delete(videoId);
 }
