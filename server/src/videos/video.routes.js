@@ -1,86 +1,41 @@
 import express from 'express';
-import multer from 'multer';
-import path from 'path';
-import { randomUUID } from 'crypto';
 import { z } from 'zod';
-import config from '../config.js';
-import authMiddleware from '../auth/jwt.middleware.js';
 import asyncHandler from '../utils/asyncHandler.js';
 import { validateBody } from '../utils/validate.js';
-import { AppError } from '../utils/errors.js';
-import {
-  uploadVideo,
-  listUserVideos,
-  getVideo,
-  streamVideo,
-  requestTranscode,
-  serveThumbnail,
-  removeVideo
-} from './video.controller.js';
 import { createVideoUpload, listVideos } from './video.service.js';
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, config.PUBLIC_VIDEOS_DIR);
-  },
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.mp4';
-    cb(null, `${Date.now()}-${randomUUID()}${ext}`);
-  }
-});
-
-const fileFilter = (req, file, cb) => {
-  if (file.mimetype && file.mimetype.startsWith('video/')) {
-    cb(null, true);
-  } else {
-    cb(new AppError('Only video files are allowed', 400, 'INVALID_FILE_TYPE'));
-  }
-};
-
-const upload = multer({
-  storage,
-  fileFilter,
-  limits: {
-    fileSize: config.LIMIT_FILE_SIZE_MB * 1024 * 1024
-  }
-});
-
-const transcodeSchema = z.object({
-  preset: z.string().optional()
-});
 
 const router = express.Router();
 
-// Public helper endpoints for local development
-router.post('/upload', upload.single('file'), async (req, res, next) => {
-  try {
-    const ownerId = req.body?.ownerId || 'anonymous';
-    const video = await createVideoUpload(ownerId, req.file);
-    res.status(201).json({ video });
-  } catch (err) {
-    next(err);
-  }
+const uploadRequestSchema = z.object({
+  ownerId: z.string().trim().min(1).optional(),
+  filename: z.string().min(1, 'Filename is required'),
+  contentType: z.string().min(1).optional(),
+  sizeBytes: z.number().int().nonnegative().optional()
 });
 
-router.get('/', async (req, res, next) => {
-  try {
-    const { ownerId, page, limit } = req.query;
-    const videos = await listVideos(ownerId, page, limit);
-    res.json(videos);
-  } catch (err) {
-    next(err);
-  }
+router.post(
+  '/upload',
+  validateBody(uploadRequestSchema),
+  asyncHandler(async (req, res) => {
+    const { ownerId, filename, contentType, sizeBytes } = req.validatedBody;
+    const result = await createVideoUpload(ownerId, { filename, contentType, sizeBytes });
+    res.status(201).json(result);
+  })
+);
+
+const listQuerySchema = z.object({
+  ownerId: z.string().optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(10)
 });
 
-// Existing authenticated routes
-router.use(authMiddleware);
-
-router.post('/upload-file', upload.single('file'), asyncHandler(uploadVideo));
-router.get('/user', asyncHandler(listUserVideos));
-router.get('/:id', asyncHandler(getVideo));
-router.get('/:id/stream', asyncHandler(streamVideo));
-router.post('/:id/transcode', validateBody(transcodeSchema), asyncHandler(requestTranscode));
-router.get('/:id/thumbnail', asyncHandler(serveThumbnail));
-router.delete('/:id', asyncHandler(removeVideo));
+router.get(
+  '/',
+  asyncHandler(async (req, res) => {
+    const { ownerId, page, limit } = listQuerySchema.parse(req.query);
+    const result = await listVideos(ownerId, page, limit);
+    res.json(result);
+  })
+);
 
 export default router;
