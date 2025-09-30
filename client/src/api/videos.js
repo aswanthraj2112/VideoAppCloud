@@ -71,13 +71,42 @@ function resolveMediaUrl(relativePath) {
 
 export const videosAPI = {
   uploadVideo: async (file, ownerId) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    if (ownerId) {
-      formData.append('ownerId', ownerId);
+    if (typeof File !== 'undefined' && !(file instanceof File)) {
+      throw new Error('A file must be provided to upload');
     }
 
-    return request('/api/videos/upload', { method: 'POST', body: formData });
+    const metadata = {
+      filename: file.name,
+      contentType: file.type || 'application/octet-stream',
+      sizeBytes: file.size
+    };
+
+    if (ownerId) {
+      metadata.ownerId = ownerId;
+    }
+
+    const { uploadUrl, video } = await request('/api/videos/upload', {
+      method: 'POST',
+      body: metadata
+    });
+
+    if (!uploadUrl) {
+      throw new Error('Server did not return a pre-signed upload URL');
+    }
+
+    const uploadResponse = await fetch(uploadUrl, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': metadata.contentType
+      },
+      body: file
+    });
+
+    if (!uploadResponse.ok) {
+      throw new Error('Failed to upload file to object storage');
+    }
+
+    return { video };
   },
 
   listVideos: (page = 1, limit = 10, ownerId) => {
